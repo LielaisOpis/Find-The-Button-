@@ -1,0 +1,187 @@
+local DataStoreService = game:GetService("DataStoreService")
+local RunService = game:GetService("RunService")
+
+-- DataStore configuration
+local PlayerDataStore = DataStoreService:GetDataStore("PlayerData")
+local CoinsDataStore = DataStoreService:GetDataStore("CoinsData")
+local WinsDataStore = DataStoreService:GetDataStore("WinsData")
+local RobuxDataStore = DataStoreService:GetDataStore("RobuxData")
+
+-- Game configuration
+local PowerUps = {
+    "Nuke", "Bomb", "Gravity", "Speed", 
+    "Ten", "Compass", "Money", "Carpet"
+}
+
+local Emotes = {
+    Emote1 = 5917570207,
+    Emote2 = 4102315500,
+    Emote3 = 3823158750,
+    Emote4 = 5104377791,
+    Emote5 = 12507097350,
+    Emote6 = 4689362868,
+    Emote7 = 3576719440,
+    Emote8 = 17746270218
+}
+
+local PlayerDataCache = {}
+local MAX_RETRIES = 5
+local RETRY_DELAY = 2
+
+local function CreateLeaderstats(player)
+    local leaderstats = Instance.new("Folder")
+    leaderstats.Name = "leaderstats"
+    leaderstats.Parent = player
+
+    local coins = Instance.new("IntValue")
+    coins.Name = "Coins"
+    coins.Value = 0
+    coins.Parent = leaderstats
+
+    local wins = Instance.new("IntValue")
+    wins.Name = "Wins"
+    wins.Value = 0
+    wins.Parent = leaderstats
+
+    local robuxSpent = Instance.new("IntValue")
+    robuxSpent.Name = "RobuxSpent"
+    robuxSpent.Value = 0
+    robuxSpent.Parent = leaderstats
+
+    local equippedEmote = Instance.new("IntValue")
+    equippedEmote.Name = "EquippedEmote"
+    equippedEmote.Value = 507771019
+    equippedEmote.Parent = leaderstats
+
+    return leaderstats
+end
+
+local function LoadPlayerData(player)
+    local playerId = player.UserId
+    local retries = 0
+    local success = false
+
+    repeat
+        success = pcall(function()
+            local data = {
+                Coins = CoinsDataStore:GetAsync(playerId) or 0,
+                Wins = WinsDataStore:GetAsync(playerId) or 0,
+                Robux = RobuxDataStore:GetAsync(playerId) or 0,
+                Profile = PlayerDataStore:GetAsync(playerId) or {
+                    Emotes = {},
+                    PowerUps = {},
+                    EquippedEmote = 507771019
+                }
+            }
+            
+            PlayerDataCache[playerId] = data.Profile
+            
+            local leaderstats = CreateLeaderstats(player)
+            leaderstats.Coins.Value = data.Coins
+            leaderstats.Wins.Value = data.Wins
+            leaderstats.RobuxSpent.Value = data.Robux
+            leaderstats.EquippedEmote.Value = data.Profile.EquippedEmote
+
+            local playerFolder = Instance.new("Folder")
+            playerFolder.Name = "PlayerData"
+            playerFolder.Parent = player
+
+            local powerUpsFolder = Instance.new("Folder")
+            powerUpsFolder.Name = "PowerUps"
+            powerUpsFolder.Parent = playerFolder
+
+            for _, powerUp in ipairs(PowerUps) do
+                local value = Instance.new("IntValue")
+                value.Name = powerUp
+                value.Value = data.Profile.PowerUps[powerUp] or 0
+                value.Parent = powerUpsFolder
+            end
+
+            local emotesFolder = Instance.new("Folder")
+            emotesFolder.Name = "Emotes"
+            emotesFolder.Parent = playerFolder
+
+            for name, id in pairs(Emotes) do
+                local value = Instance.new("BoolValue")
+                value.Name = name
+                value.Value = data.Profile.Emotes[name] or false
+                value.Parent = emotesFolder
+
+                local idValue = Instance.new("NumberValue")
+                idValue.Name = "ID"
+                idValue.Value = id
+                idValue.Parent = value
+            end
+        end)
+
+        if not success then
+            retries += 1
+            task.wait(RETRY_DELAY)
+        end
+    until success or retries >= MAX_RETRIES
+
+    if not success then
+        player:Kick("Failed to load player data. Please rejoin.")
+    end
+end
+
+local function SavePlayerData(player)
+    local playerId = player.UserId
+    if not PlayerDataCache[playerId] then return end
+
+    local playerData = player:FindFirstChild("PlayerData")
+    local leaderstats = player:FindFirstChild("leaderstats")
+
+    if not playerData or not leaderstats then return end
+
+    PlayerDataCache[playerId].EquippedEmote = leaderstats.EquippedEmote.Value
+
+    local emotesFolder = playerData:FindFirstChild("Emotes")
+    if emotesFolder then
+        for _, emote in ipairs(emotesFolder:GetChildren()) do
+            if emote:IsA("BoolValue") then
+                PlayerDataCache[playerId].Emotes[emote.Name] = emote.Value
+            end
+        end
+    end
+
+    local powerUpsFolder = playerData:FindFirstChild("PowerUps")
+    if powerUpsFolder then
+        for _, powerUp in ipairs(powerUpsFolder:GetChildren()) do
+            if powerUp:IsA("IntValue") then
+                PlayerDataCache[playerId].PowerUps[powerUp.Name] = powerUp.Value
+            end
+        end
+    end
+
+    local retries = 0
+    local success = false
+
+    repeat
+        success = pcall(function()
+            CoinsDataStore:SetAsync(playerId, leaderstats.Coins.Value)
+            WinsDataStore:SetAsync(playerId, leaderstats.Wins.Value)
+            RobuxDataStore:SetAsync(playerId, leaderstats.RobuxSpent.Value)
+            PlayerDataStore:SetAsync(playerId, PlayerDataCache[playerId])
+        end)
+
+        if not success then
+            retries += 1
+            task.wait(RETRY_DELAY)
+        end
+    until success or retries >= MAX_RETRIES
+
+    PlayerDataCache[playerId] = nil
+end
+
+game.Players.PlayerAdded:Connect(LoadPlayerData)
+game.Players.PlayerRemoving:Connect(SavePlayerData)
+
+if not RunService:IsStudio() then
+    game:BindToClose(function()
+        for _, player in ipairs(game.Players:GetPlayers()) do
+            SavePlayerData(player)
+            player:Kick("Server shutting down. Your progress has been saved.")
+        end
+    end)
+end
