@@ -1,0 +1,180 @@
+local DataStoreService = game:GetService("DataStoreService")
+
+-- Leaderboard configuration
+local LEADERBOARDS = {
+    {
+        DataStore = DataStoreService:GetOrderedDataStore("CoinsData"),
+        Board = workspace.Game.Boards.Leaderboards.Coins,
+        Name = "Coins",
+        TopPlayers = 5
+    },
+    {
+        DataStore = DataStoreService:GetOrderedDataStore("WinsData"),
+        Board = workspace.Game.Boards.Leaderboards.Wins,
+        Name = "Wins",
+        TopPlayers = 5
+    },
+    {
+        DataStore = DataStoreService:GetOrderedDataStore("RobuxData"),
+        Board = workspace.Game.Boards.Leaderboards.RobuxSpent,
+        Name = "RobuxSpent",
+        TopPlayers = 5
+    }
+}
+
+local UPDATE_INTERVAL = 10
+local LB_FRAME_TEMPLATE = game.ReplicatedStorage.Assets.UI.LBFrame
+local RANK_COLORS = {
+    [1] = Color3.fromRGB(255, 215, 0),    -- Gold
+    [2] = Color3.fromRGB(192, 192, 192),   -- Silver
+    [3] = Color3.fromRGB(205, 127, 50),    -- Bronze
+    default = Color3.fromRGB(255, 255, 255) -- White
+}
+
+local function formatNumber(value)
+    if value >= 1000000 then
+        return string.format("%.2fm", value / 1000000)
+    elseif value >= 1000 then
+        return string.format("%.2fk", value / 1000)
+    end
+    return tostring(value)
+end
+
+local function clearLeaderboard(board)
+    for _, child in ipairs(board.BoardPart.SurfaceGui.ScrollingFrame:GetChildren()) do
+        if child:IsA("Frame") then
+            child:Destroy()
+        end
+    end
+end
+
+local function createLeaderboardEntry(rank, userId, value, board)
+    local success, playerName = pcall(function()
+        return game.Players:GetNameFromUserIdAsync(userId)
+    end)
+
+    if not success or value == 0 then return end
+
+    local entryFrame = LB_FRAME_TEMPLATE:Clone()
+    entryFrame.Amount.Text = formatNumber(value)
+    entryFrame.RankName.Text = string.format("#%d %s", rank, playerName)
+    entryFrame.PlrImage.Image = string.format(
+        "https://www.roblox.com/headshot-thumbnail/image?userId=%d&width=420&height=420&format=png",
+        userId
+    )
+
+    local color = RANK_COLORS[rank] or RANK_COLORS.default
+    local stroke = entryFrame:FindFirstChild("UIStroke")
+    
+    if stroke then
+        stroke.Color = color
+    end
+
+    entryFrame.Amount.TextColor3 = color
+    entryFrame.RankName.TextColor3 = color
+    entryFrame.Parent = board.BoardPart.SurfaceGui.ScrollingFrame
+end
+
+local function updateLeaderboard(leaderboard)
+    local success, data = pcall(function()
+        local sortedData = leaderboard.DataStore:GetSortedAsync(false, leaderboard.TopPlayers)
+        return sortedData:GetCurrentPage()
+    end)
+
+    if not success then
+        warn("Failed to update leaderboard:", leaderboard.Name, data)
+        return
+    end
+
+    clearLeaderboard(leaderboard.Board)
+
+    for rank, entry in ipairs(data) do
+        local userId = tonumber(entry.key)
+        local value = entry.value
+        createLeaderboardEntry(rank, userId, value, leaderboard.Board)
+    end
+end
+
+local function updatePlayerData(player)
+    local leaderstats = player:FindFirstChild("leaderstats")
+    if not leaderstats then return end
+
+    for _, leaderboard in ipairs(LEADERBOARDS) do
+        local statValue = leaderstats:FindFirstChild(leaderboard.Name)
+        if statValue then
+            pcall(function()
+                leaderboard.DataStore:SetAsync(player.UserId, statValue.Value)
+            end)
+        end
+    end
+end
+
+local function setupPlayerUI(player)
+    if not player.Character then return end
+
+    local function updateCoinDisplay()
+        local coins = player.leaderstats and player.leaderstats:FindFirstChild("Coins")
+        if coins then
+            player.PlayerGui.HUD.Coins.Coins.Text = formatNumber(coins.Value)
+        end
+    end
+
+    local function updatePowerups()
+        local powerupsFolder = player:FindFirstChild(player.Name.. "Folder") and 
+                             player[player.Name.. "Folder"]:FindFirstChild("PowerUpsFolder")
+        
+        if not powerupsFolder then return end
+
+        for _, powerup in ipairs(powerupsFolder:GetChildren()) do
+            if powerup:IsA("IntValue") then
+                local hotbarElement = player.PlayerGui.PowerHotbar:FindFirstChild(powerup.Name)
+                local shopElement = script.Parent.Parent.Shops.PowerEmoteShop.PowerUpsFrame:FindFirstChild(powerup.Name)
+                
+                if powerup.Value >= 1 then
+                    if hotbarElement then
+                        hotbarElement.Amount.Visible = true
+                        hotbarElement.Amount.Text = tostring(powerup.Value)
+                    end
+                    if shopElement then
+                        shopElement.Amount.Text = tostring(powerup.Value)
+                    end
+                end
+
+                powerup.Changed:Connect(function()
+                    if powerup.Value >= 1 then
+                        if hotbarElement then
+                            hotbarElement.Amount.Visible = true
+                            hotbarElement.Amount.Text = tostring(powerup.Value)
+                        end
+                        if shopElement then
+                            shopElement.Amount.Text = tostring(powerup.Value)
+                        end
+                    end
+                end)
+            end
+        end
+    end
+
+    updateCoinDisplay()
+    updatePowerups()
+end
+
+-- Initialize player connections
+game.Players.PlayerAdded:Connect(function(player)
+    player.CharacterAdded:Connect(function()
+        setupPlayerUI(player)
+    end)
+end)
+
+-- Main update loop
+while true do
+    for _, player in ipairs(game.Players:GetPlayers()) do
+        updatePlayerData(player)
+    end
+
+    for _, leaderboard in ipairs(LEADERBOARDS) do
+        updateLeaderboard(leaderboard)
+    end
+
+    task.wait(UPDATE_INTERVAL)
+end
